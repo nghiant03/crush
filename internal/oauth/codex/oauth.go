@@ -27,13 +27,18 @@ import (
 const (
 	clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-	authorizeURL = "https://auth.openai.com/oauth/authorize"
-	tokenURL     = "https://auth.openai.com/oauth/token"
-	redirectURI  = "http://localhost:1455/auth/callback"
-	baseURL      = "https://chatgpt.com/backend-api/codex"
-	accountURL   = "https://api.openai.com/auth/v1/account"
-	tokenInfoURL = "https://api.openai.com/auth/v1/token-info"
-	originator   = "Codex Crush"
+	issuerURL             = "https://auth.openai.com"
+	authorizeURL          = issuerURL + "/oauth/authorize"
+	tokenURL              = issuerURL + "/oauth/token"
+	deviceUserCodeURL     = issuerURL + "/api/accounts/deviceauth/usercode"
+	deviceTokenURL        = issuerURL + "/api/accounts/deviceauth/token"
+	deviceVerificationURL = issuerURL + "/codex/device"
+	deviceRedirectURI     = issuerURL + "/deviceauth/callback"
+	redirectURI           = "http://localhost:1455/auth/callback"
+	baseURL               = "https://chatgpt.com/backend-api/codex"
+	accountURL            = "https://api.openai.com/auth/v1/account"
+	tokenInfoURL          = "https://api.openai.com/auth/v1/token-info"
+	originator            = "Codex Crush"
 )
 
 // AuthURL builds the authorization URL with PKCE challenge.
@@ -63,6 +68,14 @@ func AuthURL() (string, string, string) {
 
 // ExchangeCode exchanges the authorization code for tokens.
 func ExchangeCode(ctx context.Context, code, verifier string) (*oauth.Token, error) {
+	return exchangeCode(ctx, code, verifier, redirectURI)
+}
+
+func exchangeDeviceCode(ctx context.Context, code, verifier string) (*oauth.Token, error) {
+	return exchangeCode(ctx, code, verifier, deviceRedirectURI)
+}
+
+func exchangeCode(ctx context.Context, code, verifier, redirectURI string) (*oauth.Token, error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -114,6 +127,138 @@ func ExchangeCode(ctx context.Context, code, verifier string) (*oauth.Token, err
 	token.AccountID = cmpOr(ExtractAccountID(token.AccessToken), ExtractAccountID(token.IDToken))
 	token.SetExpiresAt()
 	return token, nil
+}
+
+type DeviceCode struct {
+	DeviceAuthID    string
+	UserCode        string
+	VerificationURL string
+	ExpiresIn       int
+	Interval        int
+	Verifier        string
+}
+
+// RequestDeviceCode initiates the Codex device authorization flow.
+func RequestDeviceCode(ctx context.Context) (*DeviceCode, error) {
+	verifier := generateCodeVerifier()
+	body := strings.NewReader(fmt.Sprintf(`{"client_id":%q}`, clientID))
+	req, err := http.NewRequestWithContext(ctx, "POST", deviceUserCodeURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	setHeaders(req.Header)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("device code request failed: status %d body %q", resp.StatusCode, string(responseBody))
+	}
+
+	var result struct {
+		DeviceAuthID string `json:"device_auth_id"`
+		UserCode     string `json:"user_code"`
+		UserCodeAlt  string `json:"usercode"`
+		Interval     string `json:"interval"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+	interval := 5
+	if result.Interval != "" {
+		if _, err := fmt.Sscanf(result.Interval, "%d", &interval); err != nil {
+			return nil, fmt.Errorf("parse interval: %w", err)
+		}
+	}
+	userCode := cmpOr(result.UserCode, result.UserCodeAlt)
+	if result.DeviceAuthID == "" || userCode == "" {
+		return nil, fmt.Errorf("device code response missing required fields")
+	}
+
+	return &DeviceCode{
+		DeviceAuthID:    result.DeviceAuthID,
+		UserCode:        userCode,
+		VerificationURL: deviceVerificationURL,
+		ExpiresIn:       15 * 60,
+		Interval:        max(interval, 5),
+		Verifier:        verifier,
+	}, nil
+}
+
+// PollForDeviceCode polls Codex until the device authorization is complete.
+func PollForDeviceCode(ctx context.Context, dc *DeviceCode) (*oauth.Token, error) {
+	deadline := time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second)
+	interval := time.Duration(max(dc.Interval, 5)) * time.Second
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
+
+		code, verifier, err := pollDeviceCode(ctx, dc)
+		if err == errDevicePending {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return exchangeDeviceCode(ctx, code, cmpOr(verifier, dc.Verifier))
+	}
+	return nil, fmt.Errorf("authorization timed out")
+}
+
+var errDevicePending = fmt.Errorf("pending")
+
+func pollDeviceCode(ctx context.Context, dc *DeviceCode) (string, string, error) {
+	body := strings.NewReader(fmt.Sprintf(`{"device_auth_id":%q,"user_code":%q}`, dc.DeviceAuthID, dc.UserCode))
+	req, err := http.NewRequestWithContext(ctx, "POST", deviceTokenURL, body)
+	if err != nil {
+		return "", "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	setHeaders(req.Header)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", "", fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		return "", "", errDevicePending
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("device auth failed: status %d body %q", resp.StatusCode, string(responseBody))
+	}
+
+	var result struct {
+		AuthorizationCode string `json:"authorization_code"`
+		CodeVerifier      string `json:"code_verifier"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return "", "", fmt.Errorf("unmarshal response: %w", err)
+	}
+	if result.AuthorizationCode == "" {
+		return "", "", errDevicePending
+	}
+	return result.AuthorizationCode, result.CodeVerifier, nil
 }
 
 // RefreshToken refreshes the access token using the refresh token.

@@ -46,6 +46,15 @@ func TestParseRedirectURLReturnsOAuthCallbackError(t *testing.T) {
 	require.Contains(t, err.Error(), "missing_codex_entitlement")
 }
 
+func TestDeviceCodeConstantsMatchOfficialCodexEndpoints(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "https://auth.openai.com/api/accounts/deviceauth/usercode", deviceUserCodeURL)
+	require.Equal(t, "https://auth.openai.com/api/accounts/deviceauth/token", deviceTokenURL)
+	require.Equal(t, "https://auth.openai.com/codex/device", deviceVerificationURL)
+	require.Equal(t, "https://auth.openai.com/deviceauth/callback", deviceRedirectURI)
+}
+
 func TestExtractAccountID(t *testing.T) {
 	t.Parallel()
 

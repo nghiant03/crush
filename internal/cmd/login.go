@@ -228,7 +228,17 @@ func loginCodex(ctx context.Context, c *client.Client, wsID string) error {
 	fmt.Println()
 
 	if err := browser.OpenURL(authURL); err != nil {
-		fmt.Println("Could not open the URL. You'll need to manually open the URL in your browser.")
+		fmt.Println("Could not open the browser. Falling back to device code login.")
+		token, err := loginCodexDevice(loginCtx)
+		if err != nil {
+			return err
+		}
+		if err := saveCodexToken(loginCtx, c, wsID, token); err != nil {
+			return err
+		}
+		fmt.Println()
+		fmt.Println("You're now authenticated with OpenAI Codex!")
+		return nil
 	}
 	fmt.Println("After logging in, paste the full redirect URL here:")
 	fmt.Print("> ")
@@ -259,6 +269,25 @@ func loginCodex(ctx context.Context, c *client.Client, wsID string) error {
 	fmt.Println()
 	fmt.Println("You're now authenticated with OpenAI Codex!")
 	return nil
+}
+
+func loginCodexDevice(ctx context.Context) (*oauth.Token, error) {
+	fmt.Println("Requesting device code from OpenAI...")
+	dc, err := codex.RequestDeviceCode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println()
+	fmt.Println("Open the following URL and follow the instructions to authenticate with OpenAI Codex:")
+	fmt.Println()
+	fmt.Println(lipgloss.NewStyle().Hyperlink(dc.VerificationURL, "id=codex-device").Render(dc.VerificationURL))
+	fmt.Println()
+	fmt.Println("Code:", lipgloss.NewStyle().Bold(true).Render(dc.UserCode))
+	fmt.Println()
+	fmt.Println("Waiting for authorization...")
+
+	return codex.PollForDeviceCode(ctx, dc)
 }
 
 func saveCodexToken(ctx context.Context, c *client.Client, wsID string, token *oauth.Token) error {
