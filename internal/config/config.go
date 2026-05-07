@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/oauth"
+	"github.com/charmbracelet/crush/internal/oauth/codex"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/invopop/jsonschema"
 )
@@ -156,6 +157,17 @@ func (c *ProviderConfig) ToProvider() catwalk.Provider {
 
 func (c *ProviderConfig) SetupGitHubCopilot() {
 	maps.Copy(c.ExtraHeaders, copilot.Headers())
+}
+
+// SetupCodex sets up the provider with Codex-specific headers and
+// configuration for OpenAI Responses API.
+func (c *ProviderConfig) SetupCodex() {
+	if c.ExtraHeaders == nil {
+		c.ExtraHeaders = make(map[string]string)
+	}
+	maps.Copy(c.ExtraHeaders, codex.HeadersForToken(c.OAuthToken))
+	c.BaseURL = codex.BaseURL()
+	c.Type = "openai"
 }
 
 type MCPType string

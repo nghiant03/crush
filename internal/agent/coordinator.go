@@ -665,12 +665,18 @@ func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map
 	return anthropic.New(opts...)
 }
 
-func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[string]string, providerCfg config.ProviderConfig) (fantasy.Provider, error) {
 	opts := []openai.Option{
 		openai.WithAPIKey(apiKey),
 		openai.WithUseResponsesAPI(),
 	}
-	if c.cfg.Config().Options.Debug {
+	if isCodexOAuthProvider(providerCfg) {
+		opts = append(opts, openai.WithSDKOptions(
+			openaisdk.WithJSONDel("max_output_tokens"),
+			openaisdk.WithJSONDel("max_tokens"),
+		))
+		opts = append(opts, openai.WithHTTPClient(newCodexResponsesHTTPClient(c.cfg.Config().Options.Debug)))
+	} else if c.cfg.Config().Options.Debug {
 		httpClient := log.NewHTTPClient()
 		opts = append(opts, openai.WithHTTPClient(httpClient))
 	}
@@ -681,6 +687,10 @@ func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[st
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
 	return openai.New(opts...)
+}
+
+func isCodexOAuthProvider(providerCfg config.ProviderConfig) bool {
+	return providerCfg.ID == string(catwalk.InferenceProviderOpenAI) && providerCfg.OAuthToken != nil
 }
 
 func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[string]string) (fantasy.Provider, error) {
@@ -844,7 +854,7 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 
 	switch providerCfg.Type {
 	case openai.Name:
-		return c.buildOpenaiProvider(baseURL, apiKey, headers)
+		return c.buildOpenaiProvider(baseURL, apiKey, headers, providerCfg)
 	case anthropic.Name:
 		return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID)
 	case openrouter.Name:

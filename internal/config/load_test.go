@@ -10,6 +10,7 @@ import (
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/env"
+	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,44 @@ func TestConfig_configureProviders(t *testing.T) {
 	// We want to make sure that we keep the configured API key as a placeholder
 	pc, _ := cfg.Providers.Get("openai")
 	require.Equal(t, "$OPENAI_API_KEY", pc.APIKey)
+}
+
+func TestConfig_configureProvidersWithOpenAIOAuthToken(t *testing.T) {
+	knownProviders := []catwalk.Provider{
+		{
+			ID:          catwalk.InferenceProviderOpenAI,
+			APIKey:      "$OPENAI_API_KEY",
+			APIEndpoint: "https://api.openai.com/v1",
+			Type:        catwalk.TypeOpenAI,
+			Models: []catwalk.Model{{
+				ID: "test-model",
+			}},
+		},
+	}
+
+	cfg := &Config{
+		Providers: csync.NewMap[string, ProviderConfig](),
+	}
+	cfg.Providers.Set("openai", ProviderConfig{
+		APIKey: "oauth-access-token",
+		OAuthToken: &oauth.Token{
+			AccessToken:  "oauth-access-token",
+			RefreshToken: "oauth-refresh-token",
+		},
+	})
+	cfg.setDefaults("/tmp", "")
+
+	env := env.NewFromMap(map[string]string{})
+	resolver := NewEnvironmentVariableResolver(env)
+	err := cfg.configureProviders(testStore(cfg), env, resolver, knownProviders)
+	require.NoError(t, err)
+
+	pc, ok := cfg.Providers.Get("openai")
+	require.True(t, ok)
+	require.Equal(t, "oauth-access-token", pc.APIKey)
+	require.Equal(t, catwalk.TypeOpenAI, pc.Type)
+	require.NotNil(t, pc.OAuthToken)
+	require.Equal(t, "Codex Crush", pc.ExtraHeaders["User-Agent"])
 }
 
 func TestConfig_configureProvidersWithOverride(t *testing.T) {
