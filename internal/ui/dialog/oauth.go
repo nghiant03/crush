@@ -253,26 +253,21 @@ func (m *OAuth) innerDialogContent() string {
 			)
 
 	case OAuthStateDisplay:
+		instructionText := instructionStyle.Render("Press ") +
+			enterKeyStyle.Render("enter") +
+			instructionStyle.Render(" to copy the code below and open the browser.")
+		if m.userCode == "" {
+			instructionText = instructionStyle.Render("Press ") +
+				enterKeyStyle.Render("enter") +
+				instructionStyle.Render(" to open the browser.")
+		}
+
 		instructions := lipgloss.NewStyle().
 			Margin(0, 1).
 			Width(m.width - 2).
-			Render(
-				instructionStyle.Render("Press ") +
-					enterKeyStyle.Render("enter") +
-					instructionStyle.Render(" to copy the code below and open the browser."),
-			)
+			Render(instructionText)
 
-		codeBox := lipgloss.NewStyle().
-			Width(m.width-2).
-			Height(7).
-			Align(lipgloss.Center, lipgloss.Center).
-			Background(t.Dialog.OAuth.UserCodeBg).
-			Margin(0, 1).
-			Render(
-				t.Dialog.OAuth.UserCode.Render(m.userCode),
-			)
-
-		link := linkStyle.Hyperlink(m.verificationURL, "id=oauth-verify").Render(m.verificationURL)
+		link := linkStyle.Hyperlink(m.verificationURL).Render(m.verificationURL)
 		url := statusTextStyle.
 			Margin(0, 1).
 			Width(m.width - 2).
@@ -285,18 +280,22 @@ func (m *OAuth) innerDialogContent() string {
 				successStyle.Render(m.spinner.View()) + statusTextStyle.Render("Verifying..."),
 			)
 
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			"",
-			instructions,
-			"",
-			codeBox,
-			"",
-			url,
-			"",
-			waiting,
-			"",
-		)
+		elements := []string{"", instructions, ""}
+		if m.userCode != "" {
+			codeBox := lipgloss.NewStyle().
+				Width(m.width-2).
+				Height(7).
+				Align(lipgloss.Center, lipgloss.Center).
+				Background(t.Dialog.OAuth.UserCodeBg).
+				Margin(0, 1).
+				Render(
+					t.Dialog.OAuth.UserCode.Render(m.userCode),
+				)
+			elements = append(elements, codeBox, "")
+		}
+		elements = append(elements, url, "", waiting, "")
+
+		return lipgloss.JoinVertical(lipgloss.Left, elements...)
 
 	case OAuthStateSuccess:
 		return successStyle.
@@ -347,6 +346,9 @@ func (d *OAuth) copyCode() tea.Cmd {
 	if d.State != OAuthStateDisplay {
 		return nil
 	}
+	if d.userCode == "" {
+		return common.CopyToClipboard(d.verificationURL, "URL copied to clipboard")
+	}
 	return common.CopyToClipboard(d.userCode, "Code copied to clipboard")
 }
 
@@ -354,12 +356,24 @@ func (d *OAuth) copyCodeAndOpenURL() tea.Cmd {
 	if d.State != OAuthStateDisplay {
 		return nil
 	}
+	if d.userCode == "" {
+		return common.CopyToClipboardWithCallback(
+			d.verificationURL,
+			"URL copied and opened",
+			func() tea.Msg {
+				if err := browser.OpenURL(d.verificationURL); err != nil {
+					return util.ReportError(fmt.Errorf("failed to open browser: %w", err))()
+				}
+				return nil
+			},
+		)
+	}
 	return common.CopyToClipboardWithCallback(
 		d.userCode,
 		"Code copied and URL opened",
 		func() tea.Msg {
 			if err := browser.OpenURL(d.verificationURL); err != nil {
-				return ActionOAuthErrored{fmt.Errorf("failed to open browser: %w", err)}
+				return util.ReportError(fmt.Errorf("failed to open browser: %w", err))()
 			}
 			return nil
 		},
