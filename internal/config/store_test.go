@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/stretchr/testify/require"
@@ -724,6 +725,61 @@ func TestRefreshOAuthToken_UsesDiskTokenWhenDifferent(t *testing.T) {
 	require.Equal(t, "newer-access-token", updatedConfig.APIKey)
 	require.Equal(t, "newer-access-token", updatedConfig.OAuthToken.AccessToken)
 	require.Equal(t, "refresh-abc", updatedConfig.OAuthToken.RefreshToken)
+}
+
+func TestConfigStore_SetProviderAPIKey_ConfiguresCodex(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "crush.json")
+	providers := csync.NewMap[string, ProviderConfig]()
+	providers.Set("openai", ProviderConfig{ID: "openai"})
+	store := &ConfigStore{
+		config: &Config{
+			Providers: providers,
+		},
+		globalDataPath: configPath,
+	}
+	token := &oauth.Token{
+		AccessToken: "access-token",
+		AccountID:   "account-id",
+	}
+
+	err := store.SetProviderAPIKey(ScopeGlobal, "openai", token)
+	require.NoError(t, err)
+
+	provider, ok := store.Config().Providers.Get("openai")
+	require.True(t, ok)
+	require.Equal(t, "access-token", provider.APIKey)
+	require.Equal(t, token, provider.OAuthToken)
+	require.Equal(t, catwalk.TypeOpenAI, provider.Type)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex", provider.BaseURL)
+	require.Equal(t, "account-id", provider.ExtraHeaders["ChatGPT-Account-ID"])
+	require.Equal(t, "Codex Crush", provider.ExtraHeaders["User-Agent"])
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.Equal(t, "access-token", gjson.GetBytes(data, "providers.openai.api_key").String())
+	require.Equal(t, "account-id", gjson.GetBytes(data, "providers.openai.oauth.account_id").String())
+}
+
+func TestConfigStore_ApplyTokenConfiguresCodex(t *testing.T) {
+	t.Parallel()
+
+	providers := csync.NewMap[string, ProviderConfig]()
+	store := &ConfigStore{config: &Config{Providers: providers}}
+	token := &oauth.Token{
+		AccessToken: "new-access-token",
+		AccountID:   "new-account-id",
+	}
+
+	err := store.applyToken(ProviderConfig{ID: "openai"}, token, "openai")
+	require.NoError(t, err)
+
+	provider, ok := store.Config().Providers.Get("openai")
+	require.True(t, ok)
+	require.Equal(t, "new-access-token", provider.APIKey)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex", provider.BaseURL)
+	require.Equal(t, "new-account-id", provider.ExtraHeaders["ChatGPT-Account-ID"])
 }
 
 // TestConfigStore_SetConfigFields_concurrentInProcess verifies that
