@@ -320,15 +320,6 @@ func (m *OAuth) innerDialogContent() string {
 			Padding(0, 1).
 			Render(instructionText)
 
-		codeBox := lipgloss.NewStyle().
-			Width(innerWidth).
-			Height(7).
-			Align(lipgloss.Center, lipgloss.Center).
-			Background(t.Dialog.OAuth.UserCodeBg).
-			Render(
-				t.Dialog.OAuth.UserCode.Render(m.userCode),
-			)
-
 		link := linkStyle.Hyperlink(m.verificationURL, "id=oauth-verify").Render(m.verificationURL)
 		url := statusTextStyle.
 			Width(innerWidth).
@@ -342,18 +333,22 @@ func (m *OAuth) innerDialogContent() string {
 				successStyle.Render(m.spinner.View()) + statusTextStyle.Render("Verifying..."),
 			)
 
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			"",
-			instructions,
-			"",
-			codeBox,
-			"",
-			url,
-			"",
-			waiting,
-			"",
-		)
+		elements := []string{"", instructions, ""}
+		if m.userCode != "" {
+			codeBox := lipgloss.NewStyle().
+				Width(m.width-2).
+				Height(7).
+				Align(lipgloss.Center, lipgloss.Center).
+				Background(t.Dialog.OAuth.UserCodeBg).
+				Margin(0, 1).
+				Render(
+					t.Dialog.OAuth.UserCode.Render(m.userCode),
+				)
+			elements = append(elements, codeBox, "")
+		}
+		elements = append(elements, url, "", waiting, "")
+
+		return lipgloss.JoinVertical(lipgloss.Left, elements...)
 
 	case OAuthStateSuccess:
 		return successStyle.
@@ -418,6 +413,9 @@ func (m *OAuth) copyCode() tea.Cmd {
 	if m.State != OAuthStateDisplay {
 		return nil
 	}
+	if m.userCode == "" {
+		return common.CopyToClipboard(m.verificationURL, "URL copied to clipboard")
+	}
 	return common.CopyToClipboard(m.userCode, "Code copied to clipboard")
 }
 
@@ -431,6 +429,18 @@ func (m *OAuth) copyURL() tea.Cmd {
 func (m *OAuth) copyCodeAndOpenURL() tea.Cmd {
 	if m.State != OAuthStateDisplay {
 		return nil
+	}
+	if m.userCode == "" {
+		return common.CopyToClipboardWithCallback(
+			m.verificationURL,
+			"URL copied and opened",
+			func() tea.Msg {
+				if err := browser.OpenURL(m.verificationURL); err != nil {
+					return util.ReportError(fmt.Errorf("failed to open browser: %w", err))()
+				}
+				return nil
+			},
+		)
 	}
 	return common.CopyToClipboardWithCallback(
 		m.userCode,

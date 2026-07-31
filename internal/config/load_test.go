@@ -427,6 +427,44 @@ func TestConfig_configureProviders(t *testing.T) {
 	require.Equal(t, "$OPENAI_API_KEY", pc.APIKey)
 }
 
+func TestConfig_configureProvidersWithOpenAIOAuthToken(t *testing.T) {
+	knownProviders := []catwalk.Provider{
+		{
+			ID:          catwalk.InferenceProviderOpenAI,
+			APIKey:      "$OPENAI_API_KEY",
+			APIEndpoint: "https://api.openai.com/v1",
+			Type:        catwalk.TypeOpenAI,
+			Models: []catwalk.Model{{
+				ID: "test-model",
+			}},
+		},
+	}
+
+	cfg := &Config{
+		Providers: csync.NewMap[string, ProviderConfig](),
+	}
+	cfg.Providers.Set("openai", ProviderConfig{
+		APIKey: "oauth-access-token",
+		OAuthToken: &oauth.Token{
+			AccessToken:  "oauth-access-token",
+			RefreshToken: "oauth-refresh-token",
+		},
+	})
+	cfg.setDefaults("/tmp", "")
+
+	env := env.NewFromMap(map[string]string{})
+	resolver := NewShellVariableResolver(env)
+	err := cfg.configureProviders(context.Background(), testStore(cfg), env, resolver, knownProviders)
+	require.NoError(t, err)
+
+	pc, ok := cfg.Providers.Get("openai")
+	require.True(t, ok)
+	require.Equal(t, "oauth-access-token", pc.APIKey)
+	require.Equal(t, catwalk.TypeOpenAI, pc.Type)
+	require.NotNil(t, pc.OAuthToken)
+	require.Equal(t, "Codex Crush", pc.ExtraHeaders["User-Agent"])
+}
+
 func TestConfig_configureProvidersWithOverride(t *testing.T) {
 	knownProviders := []catwalk.Provider{
 		{
