@@ -382,6 +382,22 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 					continue
 				}
 			}
+		case catwalk.InferenceProviderOpenCodeZen:
+			v, err := resolver.ResolveValue(p.APIKey)
+			if v == "" || err != nil {
+				// Zen's zero-cost models need no account: authenticate
+				// with the dummy "public" key, exactly like a logged-out
+				// OpenCode client, and offer only the free models. The
+				// agent layer stamps the rest of the client identity.
+				prepared.APIKey = "public"
+				free := make([]catwalk.Model, 0, len(prepared.Models))
+				for _, m := range prepared.Models {
+					if m.CostPer1MIn == 0 && m.CostPer1MOut == 0 {
+						free = append(free, m)
+					}
+				}
+				prepared.Models = free
+			}
 		default:
 			// An OAuth login is a credential too: providers signed in
 			// through OAuth (e.g. OpenAI with a ChatGPT account) are

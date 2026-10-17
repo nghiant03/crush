@@ -1050,6 +1050,15 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 		smallModel = newHyperCreditsModel(smallModel, c.hyperAPIKey)
 	}
 
+	// Zen free-tier models are only served to the logged-out OpenCode
+	// client; wrap them so every call carries that identity.
+	if largeKey, _ := c.cfg.Resolve(largeProviderCfg.APIKey); isOpenCodeFreeTierProvider(largeModelCfg.Provider, largeKey) {
+		largeModel = newOpenCodeFreeTierModel(largeModel)
+	}
+	if smallKey, _ := c.cfg.Resolve(smallProviderCfg.APIKey); isOpenCodeFreeTierProvider(smallModelCfg.Provider, smallKey) {
+		smallModel = newOpenCodeFreeTierModel(smallModel)
+	}
+
 	large := Model{
 		Model:      largeModel,
 		CatwalkCfg: *largeCatwalkModel,
